@@ -1,0 +1,16 @@
+# Python Virtual Environment
+venv/
+
+# Python cache files
+__pycache__/
+*.pyc
+
+# IDE and OS specific files
+.idea/
+.vscode/
+.DS_Store
+
+# Sensitive configuration and state files
+config.ini
+freebies.db
+*.log
