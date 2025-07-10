@@ -1,0 +1,39 @@
+name: Daily Freebie Summarizer
+
+on:
+  workflow_dispatch: # Allows manual runs
+  schedule:
+    # Runs at 22:00 UTC every day
+    - cron: '0 22 * * *'
+
+jobs:
+  run-summarizer-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+
+      # The cache is less critical here since we clear the DB, but good practice
+      - name: Restore/Save freebies database cache
+        uses: actions/cache@v4
+        with:
+          path: freebies.db
+          key: ${{ runner.os }}-freebies-db-main
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run the summarizer bot
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }} # We need to pass the new secret
+        run: python summarizer_bot.py
+        
+      # IMPORTANT: We need a step to commit the now-empty DB back to the cache
+      # The cache action automatically saves on success, so this is handled.
