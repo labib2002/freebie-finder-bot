@@ -72,7 +72,6 @@ async def check_generic_rss(db_path, bot_token, chat_id, source_name, url, title
             save_seen_deal(db_path, deal_url)
             log_deal_for_summary(deal_url, entry.title)
             new_deals_found += 1
-            time.sleep(1)
     logging.info(f"{source_name} Check Complete. Found {new_deals_found} new deals.")
 
 async def check_gamerpower_api(db_path, bot_token, chat_id, url):
@@ -96,7 +95,6 @@ async def check_gamerpower_api(db_path, bot_token, chat_id, url):
                 save_seen_deal(db_path, deal_url)
                 log_deal_for_summary(deal_url, deal['title'])
                 new_deals_found += 1
-                time.sleep(1)
     logging.info(f"GamerPower API Check Complete. Found {new_deals_found} new deals.")
 
 async def main():
