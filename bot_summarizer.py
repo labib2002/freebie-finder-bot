@@ -39,12 +39,8 @@ def sanitize_markdown_v2(text: str) -> str:
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
-# --- NEW FUNCTION ---
 def sanitize_url(url: str) -> str:
-    """
-    Escapes only the parentheses '()' inside a URL, which is required
-    for Telegram's MarkdownV2 parser inside a [text](URL) link.
-    """
+    """Escapes only the parentheses '()' inside a URL for MarkdownV2 links."""
     return url.replace('(', '\\(').replace(')', '\\)')
 
 async def get_summary_from_gemini(api_key, deals_data):
@@ -99,7 +95,7 @@ async def send_telegram_message(bot_token, chat_id, message):
 
 
 async def main():
-    logging.info("--- Summarizer Bot v4.1 (URL Sanitizing) Run Started ---")
+    logging.info("--- Summarizer Bot v4.2 (Encoding Fix) Run Started ---")
 
     # --- Step 1: Load Config and Credentials ---
     is_github_action = os.getenv('GITHUB_ACTIONS') == 'true'
@@ -155,12 +151,10 @@ async def main():
                 
                 sanitized_title = sanitize_markdown_v2(title.strip())
                 sanitized_platform = sanitize_markdown_v2(platform.strip())
-                # --- CRITICAL CHANGE ---
-                # Sanitize the URL separately for parentheses.
                 sanitized_link_url = sanitize_url(url.strip())
 
-                # Build the MarkdownV2 line with the specially sanitized URL.
-                deal_lines.append(f"• *{sanitized_title}* on `{sanitized_platform}` ([Link]({sanitized_link_url}))")
+                # --- FIX APPLIED HERE: Using Unicode escape for bullet ---
+                deal_lines.append(f"\u2022 *{sanitized_title}* on `{sanitized_platform}` ([Link]({sanitized_link_url}))")
             except ValueError:
                 logging.warning(f"Could not parse deal line: {line}")
 
@@ -174,7 +168,7 @@ async def main():
     # --- Step 5: Send the Perfectly Formatted Message ---
     await send_telegram_message(telegram_token, chat_id, final_message)
     clear_daily_log(log_file)
-    logging.info("--- Summarizer Bot v4.1 Run Finished ---")
+    logging.info("--- Summarizer Bot v4.2 Run Finished ---")
 
 
 if __name__ == "__main__":
