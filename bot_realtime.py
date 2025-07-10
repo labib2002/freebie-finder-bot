@@ -10,10 +10,8 @@ from telegram import Bot
 from telegram.constants import ParseMode
 from telegram.error import TelegramError
 
-# --- Configuration & Logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# --- Helper Functions ---
 def setup_database(db_path):
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
@@ -41,16 +39,15 @@ def save_seen_deal(db_path, url):
     finally:
         conn.close()
 
-def log_deal_for_summary(url, filename="daily_deals.txt"):
-    """Appends a new deal URL to a log file for the summarizer bot."""
+def log_deal_for_summary(url, title, filename="daily_deals.txt"):
     try:
-        with open(filename, 'a') as f:
-            f.write(url + '\n')
-        logging.info(f"Logged {url} for daily summary.")
+        with open(filename, 'a', encoding='utf-8') as f:
+            f.write(f"{url}|||{title}\n")
+        logging.info(f"Logged deal for daily summary: {title}")
     except Exception as e:
         logging.error(f"Failed to log deal for summary: {e}")
 
-def sanitize_markdown(text):
+def sanitize_markdown_v2(text: str) -> str:
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
@@ -62,7 +59,6 @@ async def send_telegram_message(bot_token, chat_id, message):
     except TelegramError as e:
         logging.error(f"Telegram API Error: {e} | Message: {message}")
 
-# --- Data Source Checkers (with logging for summary) ---
 async def check_generic_rss(db_path, bot_token, chat_id, source_name, url, title_prefix):
     logging.info(f"Checking {source_name} RSS feed...")
     feed = feedparser.parse(url)
@@ -70,11 +66,11 @@ async def check_generic_rss(db_path, bot_token, chat_id, source_name, url, title
     for entry in reversed(feed.entries):
         deal_url = entry.link
         if not is_deal_seen(db_path, deal_url):
-            sanitized_title = sanitize_markdown(entry.title)
+            sanitized_title = sanitize_markdown_v2(entry.title)
             message = f"*{title_prefix}:*\n\n*_{sanitized_title}_*\n\n[Link to Deal]({deal_url})"
             await send_telegram_message(bot_token, chat_id, message)
             save_seen_deal(db_path, deal_url)
-            log_deal_for_summary(deal_url)  # Log for the summarizer
+            log_deal_for_summary(deal_url, entry.title)
             new_deals_found += 1
             time.sleep(1)
     logging.info(f"{source_name} Check Complete. Found {new_deals_found} new deals.")
@@ -93,22 +89,20 @@ async def check_gamerpower_api(db_path, bot_token, chat_id, url):
         if deal.get('type') == 'Game':
             deal_url = deal.get('open_giveaway_url')
             if deal_url and not is_deal_seen(db_path, deal_url):
-                title = sanitize_markdown(deal['title'])
-                platforms = sanitize_markdown(deal['platforms'])
+                title = sanitize_markdown_v2(deal['title'])
+                platforms = sanitize_markdown_v2(deal['platforms'])
                 message = f"*New Deal from GamerPower:*\n\n*_{title}_*\nPlatforms: `{platforms}`\n\n[Link to Deal]({deal_url})"
                 await send_telegram_message(bot_token, chat_id, message)
                 save_seen_deal(db_path, deal_url)
-                log_deal_for_summary(deal_url)  # Log for the summarizer
+                log_deal_for_summary(deal_url, deal['title'])
                 new_deals_found += 1
                 time.sleep(1)
     logging.info(f"GamerPower API Check Complete. Found {new_deals_found} new deals.")
 
-# --- Main Execution Block ---
 async def main():
-    logging.info("--- Real-Time Notifier Bot v3.0 Run Started ---")
+    logging.info("--- Real-Time Notifier Bot v3.1 Run Started ---")
     is_github_action = os.getenv('GITHUB_ACTIONS') == 'true'
     if is_github_action:
-        logging.info("Running in GitHub Actions. Using repository secrets.")
         telegram_token = os.getenv('TELEGRAM_TOKEN')
         chat_id = os.getenv('TELEGRAM_CHAT_ID')
         sources = {
@@ -120,7 +114,6 @@ async def main():
         }
         db_path = 'freebies.db'
     else:
-        logging.info("Running locally. Using config.ini.")
         config = configparser.ConfigParser()
         config.read('config.ini')
         telegram_token = config['telegram']['token']

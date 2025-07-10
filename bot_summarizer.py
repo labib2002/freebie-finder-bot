@@ -1,25 +1,21 @@
-import configparser
-import logging
-import asyncio
-import os
-import re
-import httpx  # Use httpx for more advanced requests
+import configparser, logging, asyncio, os, re
 import google.generativeai as genai
-from bs4 import BeautifulSoup
 from telegram import Bot
 from telegram.constants import ParseMode
 from telegram.error import TelegramError
 
-# --- Configuration & Logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# --- Helper Functions ---
 def get_pending_deals(filename="daily_deals.txt"):
+    deals = []
     try:
-        with open(filename, 'r') as f:
-            return list(set(line.strip() for line in f if line.strip()))
+        with open(filename, 'r', encoding='utf-8') as f:
+            for line in f:
+                if '|||' in line:
+                    deals.append(line.strip().split('|||', 1))
+        return list(set(map(tuple, deals)))
     except FileNotFoundError:
-        logging.info("No daily deals log file found.")
+        logging.info("No daily deals log file found. Nothing to summarize.")
         return []
 
 def clear_daily_log(filename="daily_deals.txt"):
@@ -30,49 +26,29 @@ def clear_daily_log(filename="daily_deals.txt"):
     except Exception as e:
         logging.error(f"Failed to clear daily log: {e}")
 
-# --- NEW, MORE ROBUST SCRAPER ---
-async def scrape_url_content(client, url):
-    """Scrapes content from a URL using httpx to better mimic a browser."""
-    try:
-        # Using more realistic headers
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Connection': 'keep-alive',
-        }
-        response = await client.get(url, headers=headers, timeout=15, follow_redirects=True)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'lxml')
-        title = soup.title.string if soup.title else "No Title"
-        content_snippet = ' '.join(soup.body.get_text(separator=' ', strip=True).split()[:200])
-        return f"URL: {url}\nTITLE: {title}\nCONTENT_SNIPPET: {content_snippet}\n---\n"
-    except Exception as e:
-        logging.error(f"Failed to scrape {url}: {e}")
-        return ""
-
-# --- SANITIZER (we need this for the AI output now) ---
-def sanitize_markdown(text):
+def sanitize_markdown_v2(text: str) -> str:
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
-async def get_summary_from_gemini(api_key, raw_data):
+async def get_summary_from_gemini(api_key, deals_data):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel('gemini-1.5-flash-latest')
+    formatted_deals = "\n".join([f"Title: {title}\nURL: {url}" for url, title in deals_data])
     prompt = f"""
-    You are a helpful gaming news analyst called the "Hoard-Watcher's Chronicler". Your task is to analyze the following raw data scraped from recent free game announcements. Generate a clean, concise summary digest in Telegram-compatible MarkdownV2 format.
+    You are the "Hoard-Watcher's Chronicler". Analyze the following list of game deal titles and their URLs. Generate a clean, concise summary digest in Telegram-compatible MarkdownV2 format.
 
-    Your summary must have the following structure:
+    Your summary must have:
     1. A main title: *Daily Freebie Digest for [Today's Date]*.
-    2. A brief, one-sentence overview.
-    3. A bulleted list of the new free games, formatted like this: `• *Game Title* on `Platform` ([Link](deal_url))`.
-    4. Ignore discussion threads, PSAs, loot/DLC, and anything that isn't a direct game giveaway. If no actual games are found, state that clearly.
+    2. A brief, one-sentence overview highlighting the best deal(s).
+    3. A bulleted list of the new free games. Each bullet point should be: `• *Game Title* on `Platform` ([Link](deal_url))`.
+    4. You MUST infer the platform (Steam, Epic, GOG, etc.) from the title or URL.
+    5. You MUST filter out junk like discussion threads, PSAs, DLC, and in-game loot. If no actual games are found, state that.
 
-    Here is the raw data. Analyze it, de-duplicate it, identify the core game, platform, and link, and create the summary.
+    Here is the data. Create the summary.
 
-    --- RAW DATA ---
-    {raw_data}
-    --- END RAW DATA ---
+    --- DATA ---
+    {formatted_deals}
+    --- END DATA ---
     """
     try:
         logging.info("Sending request to Gemini API...")
@@ -86,27 +62,24 @@ async def get_summary_from_gemini(api_key, raw_data):
 async def send_telegram_message(bot_token, chat_id, message):
     try:
         bot = Bot(token=bot_token)
-        # CRITICAL FIX: Sanitize the final message from the AI before sending
-        sanitized_message = sanitize_markdown(message)
-        sanitized_message += "\n\n_This summary was automatically generated by the Hoard-Watcher's Chronicler\\._"
-        await bot.send_message(chat_id=chat_id, text=sanitized_message, parse_mode=ParseMode.MARKDOWN_V2)
+        sanitized_summary = sanitize_markdown_v2(message)
+        final_message = sanitized_summary + "\n\n_This summary was automatically generated by the Hoard-Watcher's Chronicler\\._"
+        await bot.send_message(chat_id=chat_id, text=final_message, parse_mode=ParseMode.MARKDOWN_V2)
         logging.info("Successfully sent summary to Telegram.")
     except TelegramError as e:
         logging.error(f"Telegram API Error after sanitizing: {e}")
 
 async def main():
-    logging.info("--- Summarizer Bot v3.0 Run Started ---")
+    logging.info("--- Summarizer Bot v3.1 Run Started ---")
     config = configparser.ConfigParser()
     config.read('config.ini')
     is_github_action = os.getenv('GITHUB_ACTIONS') == 'true'
 
-    # Load credentials
     if is_github_action:
         telegram_token = os.getenv('TELEGRAM_TOKEN')
         chat_id = os.getenv('TELEGRAM_CHAT_ID')
         gemini_api_key = os.getenv('GEMINI_API_KEY')
     else:
-        # Code to read from config.ini for local testing
         telegram_token = config['telegram']['token']
         chat_id = config['telegram']['chat_id']
         gemini_api_key = config['gemini']['api_key']
@@ -122,26 +95,12 @@ async def main():
         logging.info("No new deals to summarize. Exiting.")
         return
 
-    logging.info(f"Found {len(pending_deals)} deals to process.")
-    
-    # Use a single httpx client for all scraping requests for efficiency
-    async with httpx.AsyncClient() as client:
-        tasks = [scrape_url_content(client, url) for url in pending_deals]
-        scraped_results = await asyncio.gather(*tasks)
-
-    raw_data_for_prompt = "".join(scraped_results)
-    
-    if not raw_data_for_prompt.strip():
-        logging.warning("Scraping resulted in no data. Cannot generate summary.")
-        # We should still clear the log file to prevent it from being processed again
-        clear_daily_log(log_file)
-        return
-
-    summary_message = await get_summary_from_gemini(gemini_api_key, raw_data_for_prompt)
+    logging.info(f"Found {len(pending_deals)} unique deals to process.")
+    summary_message = await get_summary_from_gemini(gemini_api_key, pending_deals)
     await send_telegram_message(telegram_token, chat_id, summary_message)
     clear_daily_log(log_file)
-    
-    logging.info("--- Summarizer Bot v3.0 Run Finished ---")
+    logging.info("--- Summarizer Bot v3.1 Run Finished ---")
 
 if __name__ == "__main__":
+    import asyncio
     asyncio.run(main())
