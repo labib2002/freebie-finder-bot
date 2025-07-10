@@ -1,5 +1,6 @@
 import configparser
 import requests
+import asyncio
 import feedparser
 import time
 import logging
