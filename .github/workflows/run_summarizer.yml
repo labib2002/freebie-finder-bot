@@ -12,7 +12,6 @@ jobs:
       - name: Check out repository code
         uses: actions/checkout@v4
 
-      # It also needs to restore the state files to read them
       - name: Restore State Files
         uses: actions/cache@v4
         with:
@@ -20,6 +19,20 @@ jobs:
             freebies.db
             daily_deals.txt
           key: ${{ runner.os }}-state-files-main
+          # Use restore-keys to grab a cache from a different branch if needed
+          restore-keys: |
+            ${{ runner.os }}-state-files-
+
+      # --- NEW DEBUGGING STEP ---
+      - name: DEBUG - Show contents of daily_deals.txt
+        run: |
+          if test -f "daily_deals.txt"; then
+            echo "--- START BASE64 ENCODED daily_deals.txt ---"
+            base64 daily_deals.txt
+            echo "--- END BASE64 ENCODED daily_deals.txt ---"
+          else
+            echo "daily_deals.txt does not exist, nothing to display."
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -29,7 +42,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run the Summarizer bot
+      - name: Run the Summarizer bot with Debugging
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
