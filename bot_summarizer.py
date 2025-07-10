@@ -53,7 +53,7 @@ async def get_summary_from_gemini(api_key, deals_data):
     prompt = f"""
     You are the "Hoard-Watcher's Chronicler," a helpful gaming news analyst. Your task is to analyze the following list of game deal titles and their URLs. Generate a clean, concise summary digest.
 
-    Your output MUST follow this exact structure, using "|" as a separator:
+    Your output MUST follow this exact structure, using "|" as a separator and providing only plain text:
     TITLE: [A main title for the digest, including today's date]
     OVERVIEW: [A brief, one-sentence overview of the deals]
     DEAL: [Game Title]|[Platform]|[URL]
@@ -63,7 +63,7 @@ async def get_summary_from_gemini(api_key, deals_data):
     - You MUST infer the platform (Steam, Epic, GOG, etc.) from the title or URL.
     - You MUST filter out junk like discussion threads, PSAs, DLC, and in-game loot.
     - If no actual free games are found, output only a TITLE and an OVERVIEW line explaining that.
-    - Ensure the URL is the direct link provided in the data.
+    - Ensure the URL is the direct link provided in the data. Do not modify it.
 
     Here is the data. Create the summary.
 
@@ -95,7 +95,7 @@ async def send_telegram_message(bot_token, chat_id, message):
 
 
 async def main():
-    logging.info("--- Summarizer Bot v4.2 (Encoding Fix) Run Started ---")
+    logging.info("--- Summarizer Bot v4.3 (Defensive Parsing) Run Started ---")
 
     # --- Step 1: Load Config and Credentials ---
     is_github_action = os.getenv('GITHUB_ACTIONS') == 'true'
@@ -119,6 +119,9 @@ async def main():
     pending_deals = get_pending_deals(log_file)
     if not pending_deals:
         logging.info("No new deals to summarize. Exiting.")
+        # Even if there's nothing to summarize, we should clear the log
+        # in case it contains old, unprocessable data.
+        clear_daily_log(log_file)
         return
 
     logging.info(f"Found {len(pending_deals)} unique deals to process.")
@@ -133,7 +136,11 @@ async def main():
     message_parts = []
     deal_lines = []
     
-    for line in structured_summary.strip().split('\n'):
+    # Defensively clean the entire AI output first to remove any stray backslashes
+    # that might interfere with our own sanitization.
+    cleaned_structured_summary = structured_summary.replace('\\', '')
+    
+    for line in cleaned_structured_summary.strip().split('\n'):
         line = line.strip()
         if not line:
             continue
@@ -153,11 +160,16 @@ async def main():
                 sanitized_platform = sanitize_markdown_v2(platform.strip())
                 sanitized_link_url = sanitize_url(url.strip())
 
-                # --- FIX APPLIED HERE: Using Unicode escape for bullet ---
+                # Use Unicode escape for bullet point for max compatibility
                 deal_lines.append(f"\u2022 *{sanitized_title}* on `{sanitized_platform}` ([Link]({sanitized_link_url}))")
             except ValueError:
                 logging.warning(f"Could not parse deal line: {line}")
 
+    if not message_parts:
+         logging.warning("AI response was empty or unparsable. Nothing to send.")
+         clear_daily_log(log_file)
+         return
+         
     if deal_lines:
         message_parts.append("\n" + "\n".join(deal_lines))
 
@@ -168,7 +180,7 @@ async def main():
     # --- Step 5: Send the Perfectly Formatted Message ---
     await send_telegram_message(telegram_token, chat_id, final_message)
     clear_daily_log(log_file)
-    logging.info("--- Summarizer Bot v4.2 Run Finished ---")
+    logging.info("--- Summarizer Bot v4.3 Run Finished ---")
 
 
 if __name__ == "__main__":
