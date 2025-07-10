@@ -35,13 +35,17 @@ def clear_daily_log(filename="daily_deals.txt"):
         logging.error(f"Failed to clear daily log: {e}")
 
 def sanitize_markdown_v2(text: str) -> str:
-    """
-    Escapes characters for Telegram's MarkdownV2.
-    This should ONLY be used on content, NOT on formatting characters like '*' or '[]()'.
-    """
+    """Escapes characters for Telegram's MarkdownV2 for plain text content."""
     escape_chars = r'_*[]()~`>#+-=|{}.!'
-    # In the replacement string, '\\' is a literal backslash, so '\\1' means "a backslash followed by the matched character".
     return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
+
+# --- NEW FUNCTION ---
+def sanitize_url(url: str) -> str:
+    """
+    Escapes only the parentheses '()' inside a URL, which is required
+    for Telegram's MarkdownV2 parser inside a [text](URL) link.
+    """
+    return url.replace('(', '\\(').replace(')', '\\)')
 
 async def get_summary_from_gemini(api_key, deals_data):
     """Sends data to Gemini and gets a structured summary."""
@@ -50,7 +54,6 @@ async def get_summary_from_gemini(api_key, deals_data):
 
     formatted_deals = "\n".join([f"Title: {title}\nURL: {url}" for url, title in deals_data])
 
-    # NEW PROMPT: Asks for structured data, not pre-formatted Markdown.
     prompt = f"""
     You are the "Hoard-Watcher's Chronicler," a helpful gaming news analyst. Your task is to analyze the following list of game deal titles and their URLs. Generate a clean, concise summary digest.
 
@@ -64,6 +67,7 @@ async def get_summary_from_gemini(api_key, deals_data):
     - You MUST infer the platform (Steam, Epic, GOG, etc.) from the title or URL.
     - You MUST filter out junk like discussion threads, PSAs, DLC, and in-game loot.
     - If no actual free games are found, output only a TITLE and an OVERVIEW line explaining that.
+    - Ensure the URL is the direct link provided in the data.
 
     Here is the data. Create the summary.
 
@@ -75,7 +79,6 @@ async def get_summary_from_gemini(api_key, deals_data):
         logging.info("Sending request to Gemini API...")
         response = await model.generate_content_async(prompt)
         logging.info("Received response from Gemini API.")
-        # Ensure we return a clean string, even if the response is None or complex
         return response.text or ""
     except Exception as e:
         logging.error(f"Error calling Gemini API: {e}")
@@ -91,13 +94,12 @@ async def send_telegram_message(bot_token, chat_id, message):
         await bot.send_message(chat_id=chat_id, text=message, parse_mode=ParseMode.MARKDOWN_V2)
         logging.info("Successfully sent summary to Telegram.")
     except TelegramError as e:
-        # The message is already perfectly formatted, so any error is critical.
         logging.error(f"FATAL Telegram API Error: {e}")
         logging.error(f"Message Content that failed:\n---\n{message}\n---")
 
 
 async def main():
-    logging.info("--- Summarizer Bot v4.0 (Surgical) Run Started ---")
+    logging.info("--- Summarizer Bot v4.1 (URL Sanitizing) Run Started ---")
 
     # --- Step 1: Load Config and Credentials ---
     is_github_action = os.getenv('GITHUB_ACTIONS') == 'true'
@@ -128,7 +130,6 @@ async def main():
     # --- Step 3: Get Structured Data from AI ---
     structured_summary = await get_summary_from_gemini(gemini_api_key, pending_deals)
     if structured_summary.startswith("ERROR:"):
-        # If the API fails, send a simple error message.
         await send_telegram_message(telegram_token, chat_id, sanitize_markdown_v2(structured_summary))
         return
 
@@ -136,7 +137,6 @@ async def main():
     message_parts = []
     deal_lines = []
     
-    # Parse the AI's structured response
     for line in structured_summary.strip().split('\n'):
         line = line.strip()
         if not line:
@@ -144,31 +144,29 @@ async def main():
             
         if line.startswith("TITLE:"):
             title_text = sanitize_markdown_v2(line.replace("TITLE:", "", 1).strip())
-            message_parts.append(f"*{title_text}*") # Apply bold formatting
+            message_parts.append(f"*{title_text}*")
         elif line.startswith("OVERVIEW:"):
             overview_text = sanitize_markdown_v2(line.replace("OVERVIEW:", "", 1).strip())
-            message_parts.append(f"\n_{overview_text}_") # Apply italic formatting
+            message_parts.append(f"\n_{overview_text}_")
         elif line.startswith("DEAL:"):
             try:
-                # Unpack the deal, expecting "DEAL: Title|Platform|URL"
                 _, data = line.split(":", 1)
                 title, platform, url = data.strip().split('|', 2)
                 
-                # Sanitize EACH part of the content individually
                 sanitized_title = sanitize_markdown_v2(title.strip())
                 sanitized_platform = sanitize_markdown_v2(platform.strip())
-                # The URL itself in [text](URL) doesn't need escaping
-                url = url.strip()
+                # --- CRITICAL CHANGE ---
+                # Sanitize the URL separately for parentheses.
+                sanitized_link_url = sanitize_url(url.strip())
 
-                # Build the MarkdownV2 line with our own formatting
-                deal_lines.append(f"• *{sanitized_title}* on `{sanitized_platform}` ([Link]({url}))")
+                # Build the MarkdownV2 line with the specially sanitized URL.
+                deal_lines.append(f"• *{sanitized_title}* on `{sanitized_platform}` ([Link]({sanitized_link_url}))")
             except ValueError:
                 logging.warning(f"Could not parse deal line: {line}")
 
     if deal_lines:
         message_parts.append("\n" + "\n".join(deal_lines))
 
-    # Add the standard footer, which is already correctly escaped.
     footer = "\n\n_This summary was automatically generated by the Hoard\\-Watcher's Chronicler\\._"
     
     final_message = "\n".join(message_parts) + footer
@@ -176,7 +174,7 @@ async def main():
     # --- Step 5: Send the Perfectly Formatted Message ---
     await send_telegram_message(telegram_token, chat_id, final_message)
     clear_daily_log(log_file)
-    logging.info("--- Summarizer Bot v4.0 Run Finished ---")
+    logging.info("--- Summarizer Bot v4.1 Run Finished ---")
 
 
 if __name__ == "__main__":
