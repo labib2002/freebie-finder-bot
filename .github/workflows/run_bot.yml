@@ -1,0 +1,41 @@
+name: Freebie-Finder Bot CI
+
+on:
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+  # Runs on a schedule (every hour at 30 minutes past the hour)
+  schedule:
+    - cron: '30 * * * *'
+
+jobs:
+  run-freebie-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run the bot
+        # Pass the secrets to the script as environment variables
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python bot_v2.py
+
+      - name: Commit and push database changes
+        # This step saves the updated freebies.db back to your repo
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add freebies.db
+          git commit -m "Update freebies database" || echo "No changes to commit"
+          git push
