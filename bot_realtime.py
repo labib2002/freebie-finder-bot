@@ -5,7 +5,7 @@ import time
 import logging
 import sqlite3
 import re
-import os  # Import os to access environment variables
+import os
 from telegram import Bot
 from telegram.constants import ParseMode
 from telegram.error import TelegramError
@@ -13,18 +13,14 @@ from telegram.error import TelegramError
 # --- Configuration & Logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# --- Database Setup & Helpers ---
+# --- Helper Functions ---
 def setup_database(db_path):
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS deals (
-            url TEXT PRIMARY KEY
-        )
-    ''')
+    cursor.execute('CREATE TABLE IF NOT EXISTS deals (url TEXT PRIMARY KEY)')
     conn.commit()
     conn.close()
-    logging.info(f"Database '{db_path}' is set up.")
+    logging.info(f"Permanent database '{db_path}' is ready.")
 
 def is_deal_seen(db_path, url):
     conn = sqlite3.connect(db_path)
@@ -41,11 +37,19 @@ def save_seen_deal(db_path, url):
         cursor.execute("INSERT INTO deals (url) VALUES (?)", (url,))
         conn.commit()
     except sqlite3.IntegrityError:
-        logging.warning(f"URL '{url}' already exists in DB. Skipping.")
+        logging.warning(f"URL '{url}' already in permanent DB. Skipping save.")
     finally:
         conn.close()
 
-# --- Sanitizer & Telegram ---
+def log_deal_for_summary(url, filename="daily_deals.txt"):
+    """Appends a new deal URL to a log file for the summarizer bot."""
+    try:
+        with open(filename, 'a') as f:
+            f.write(url + '\n')
+        logging.info(f"Logged {url} for daily summary.")
+    except Exception as e:
+        logging.error(f"Failed to log deal for summary: {e}")
+
 def sanitize_markdown(text):
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
@@ -57,14 +61,11 @@ async def send_telegram_message(bot_token, chat_id, message):
         logging.info(f"Successfully sent notification for: {message.splitlines()[0]}")
     except TelegramError as e:
         logging.error(f"Telegram API Error: {e} | Message: {message}")
-    except Exception as e:
-        logging.error(f"An unexpected error occurred while sending Telegram message: {e}")
 
-# --- Data Source Checkers ---
+# --- Data Source Checkers (with logging for summary) ---
 async def check_generic_rss(db_path, bot_token, chat_id, source_name, url, title_prefix):
     logging.info(f"Checking {source_name} RSS feed...")
     feed = feedparser.parse(url)
-    
     new_deals_found = 0
     for entry in reversed(feed.entries):
         deal_url = entry.link
@@ -73,6 +74,7 @@ async def check_generic_rss(db_path, bot_token, chat_id, source_name, url, title
             message = f"*{title_prefix}:*\n\n*_{sanitized_title}_*\n\n[Link to Deal]({deal_url})"
             await send_telegram_message(bot_token, chat_id, message)
             save_seen_deal(db_path, deal_url)
+            log_deal_for_summary(deal_url)  # Log for the summarizer
             new_deals_found += 1
             time.sleep(1)
     logging.info(f"{source_name} Check Complete. Found {new_deals_found} new deals.")
@@ -86,7 +88,6 @@ async def check_gamerpower_api(db_path, bot_token, chat_id, url):
     except requests.RequestException as e:
         logging.error(f"Could not fetch data from GamerPower API: {e}")
         return
-
     new_deals_found = 0
     for deal in reversed(deals):
         if deal.get('type') == 'Game':
@@ -97,18 +98,17 @@ async def check_gamerpower_api(db_path, bot_token, chat_id, url):
                 message = f"*New Deal from GamerPower:*\n\n*_{title}_*\nPlatforms: `{platforms}`\n\n[Link to Deal]({deal_url})"
                 await send_telegram_message(bot_token, chat_id, message)
                 save_seen_deal(db_path, deal_url)
+                log_deal_for_summary(deal_url)  # Log for the summarizer
                 new_deals_found += 1
                 time.sleep(1)
     logging.info(f"GamerPower API Check Complete. Found {new_deals_found} new deals.")
 
-# --- Main Execution Block (UPGRADED FOR GITHUB ACTIONS) ---
+# --- Main Execution Block ---
 async def main():
-    logging.info("--- Freebie-Finder Bot v2.3 (GitHub Actions Ready) ---")
-
+    logging.info("--- Real-Time Notifier Bot v3.0 Run Started ---")
     is_github_action = os.getenv('GITHUB_ACTIONS') == 'true'
-
     if is_github_action:
-        logging.info("Running in GitHub Actions environment. Using repository secrets.")
+        logging.info("Running in GitHub Actions. Using repository secrets.")
         telegram_token = os.getenv('TELEGRAM_TOKEN')
         chat_id = os.getenv('TELEGRAM_CHAT_ID')
         sources = {
@@ -120,7 +120,7 @@ async def main():
         }
         db_path = 'freebies.db'
     else:
-        logging.info("Running in local environment. Using config.ini.")
+        logging.info("Running locally. Using config.ini.")
         config = configparser.ConfigParser()
         config.read('config.ini')
         telegram_token = config['telegram']['token']
@@ -129,7 +129,7 @@ async def main():
         db_path = config['settings']['database_file']
     
     if not telegram_token or not chat_id:
-        logging.error("Telegram token or chat_id is missing. Aborting.")
+        logging.error("Telegram credentials missing. Aborting.")
         return
 
     setup_database(db_path)
@@ -140,7 +140,7 @@ async def main():
     await check_generic_rss(db_path, telegram_token, chat_id, "IsThereAnyDeal", sources['isthereanydeal_rss_url'], "New Deal from ITAD")
     await check_gamerpower_api(db_path, telegram_token, chat_id, sources['gamerpower_api_url'])
     
-    logging.info("--- Freebie-Finder Bot Run Finished ---")
+    logging.info("--- Real-Time Notifier Bot Run Finished ---")
 
 if __name__ == "__main__":
     import asyncio

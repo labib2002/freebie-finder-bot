@@ -1,18 +1,18 @@
-name: Daily Freebie Summarizer
+name: Real-Time Freebie Notifier
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 22 * * *' # Once a day at 22:00 UTC
+    - cron: '30 * * * *' # Every hour at 30 mins past
 
 jobs:
-  run-summarizer-bot:
+  run-notifier-bot:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository code
         uses: actions/checkout@v4
 
-      # It also needs to restore the state files to read them
+      # This step restores BOTH the permanent DB and the daily log
       - name: Restore State Files
         uses: actions/cache@v4
         with:
@@ -29,9 +29,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run the Summarizer bot
+      - name: Run the Real-Time Notifier bot
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: python bot_summarizer.py
+        run: python bot_realtime.py
