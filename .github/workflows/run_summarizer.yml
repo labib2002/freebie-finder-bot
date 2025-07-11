@@ -3,36 +3,18 @@ name: Daily Freebie Summarizer
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 22 * * *' # Once a day at 22:00 UTC
+    # Runs once a day at 22:00 UTC
+    - cron: '0 22 * * *'
 
 jobs:
   run-summarizer-bot:
     runs-on: ubuntu-latest
+    permissions:
+      # Required to allow the job to write back to the repository
+      contents: write
     steps:
       - name: Check out repository code
         uses: actions/checkout@v4
-
-      - name: Restore State Files
-        uses: actions/cache@v4
-        with:
-          path: |
-            freebies.db
-            daily_deals.txt
-          key: ${{ runner.os }}-state-files-main
-          # Use restore-keys to grab a cache from a different branch if needed
-          restore-keys: |
-            ${{ runner.os }}-state-files-
-
-      # --- NEW DEBUGGING STEP ---
-      - name: DEBUG - Show contents of daily_deals.txt
-        run: |
-          if test -f "daily_deals.txt"; then
-            echo "--- START BASE64 ENCODED daily_deals.txt ---"
-            base64 daily_deals.txt
-            echo "--- END BASE64 ENCODED daily_deals.txt ---"
-          else
-            echo "daily_deals.txt does not exist, nothing to display."
-          fi
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -42,9 +24,24 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run the Summarizer bot with Debugging
+      - name: Run the Summarizer bot
         env:
+          GITHUB_ACTIONS: 'true'
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python bot_summarizer.py
+
+      - name: Commit cleared daily deals log
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          # Add the file even if it's been deleted to stage the deletion
+          git add daily_deals.txt
+          # Check if the file deletion was staged
+          if ! git diff --staged --quiet; then
+            git commit -m "Clear daily deals log after summary"
+            git push
+          else
+            echo "Daily deals log was already empty. No changes to commit."
+          fi

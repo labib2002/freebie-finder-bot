@@ -3,23 +3,18 @@ name: Real-Time Freebie Notifier
 on:
   workflow_dispatch:
   schedule:
-    - cron: '30 * * * *' # Every hour at 30 mins past
+    # Runs every 20 minutes to catch deals faster
+    - cron: '*/20 * * * *'
 
 jobs:
   run-notifier-bot:
     runs-on: ubuntu-latest
+    permissions:
+      # Required to allow the job to write back to the repository
+      contents: write
     steps:
       - name: Check out repository code
         uses: actions/checkout@v4
-
-      # This step restores BOTH the permanent DB and the daily log
-      - name: Restore State Files
-        uses: actions/cache@v4
-        with:
-          path: |
-            freebies.db
-            daily_deals.txt
-          key: ${{ runner.os }}-state-files-main
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -31,6 +26,20 @@ jobs:
 
       - name: Run the Real-Time Notifier bot
         env:
+          GITHUB_ACTIONS: 'true'
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python bot_realtime.py
+
+      - name: Commit and push state file changes
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add freebies.db daily_deals.txt
+          # Check if there are changes to commit before committing
+          if ! git diff --staged --quiet; then
+            git commit -m "Update state files (automated)"
+            git push
+          else
+            echo "No changes to commit."
+          fi
