@@ -10,7 +10,5 @@ __pycache__/
 .vscode/
 .DS_Store
 
-# Sensitive configuration and state files
+# Sensitive configuration
 config.ini
-freebies.db
-*.log

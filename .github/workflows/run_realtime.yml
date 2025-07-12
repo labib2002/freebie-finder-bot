@@ -3,14 +3,14 @@ name: Real-Time Freebie Notifier
 on:
   workflow_dispatch:
   schedule:
-    # Runs every 20 minutes to catch deals faster
+    # Runs every 20 minutes
     - cron: '*/20 * * * *'
 
 jobs:
   run-notifier-bot:
     runs-on: ubuntu-latest
     permissions:
-      # Required to allow the job to write back to the repository
+      # This permission is essential to allow the Action to push code
       contents: write
     steps:
       - name: Check out repository code
@@ -36,7 +36,7 @@ jobs:
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add freebies.db daily_deals.txt
-          # Check if there are changes to commit before committing
+          # The following lines check if there are any changes to commit before committing
           if ! git diff --staged --quiet; then
             git commit -m "Update state files (automated)"
             git push

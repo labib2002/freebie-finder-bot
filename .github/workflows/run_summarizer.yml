@@ -10,7 +10,7 @@ jobs:
   run-summarizer-bot:
     runs-on: ubuntu-latest
     permissions:
-      # Required to allow the job to write back to the repository
+      # This permission is essential to allow the Action to push code
       contents: write
     steps:
       - name: Check out repository code
@@ -36,9 +36,9 @@ jobs:
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          # Add the file even if it's been deleted to stage the deletion
+          # This command stages the deletion of the daily_deals.txt file
           git add daily_deals.txt
-          # Check if the file deletion was staged
+          # Check if the file deletion was staged before committing
           if ! git diff --staged --quiet; then
             git commit -m "Clear daily deals log after summary"
             git push
