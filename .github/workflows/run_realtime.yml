@@ -3,10 +3,8 @@ name: Real-Time Freebie Notifier
 on:
   workflow_dispatch:
   schedule:
-    # 08:00 AM Cairo time (UTC+3 during DST)
-    - cron: '0 5 * * *'
-    # 03:00 PM Cairo time (UTC+3 during DST)
-    - cron: '0 12 * * *'
+    # Run every 30 minutes (UTC)
+    - cron: '*/30 * * * *'
 
 jobs:
   run-notifier-bot:
