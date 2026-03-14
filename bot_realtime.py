@@ -13,6 +13,18 @@ from telegram.error import TelegramError
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# --- Title Blocklist (recurring non-deal posts) ---
+TITLE_BLOCKLIST = [
+    "exiled giveaways",
+    "mega threads",
+    "fgf discussion thread",
+    "discussion thread | big offers",
+]
+
+def is_blocked_title(title):
+    title_lower = title.lower()
+    return any(pattern in title_lower for pattern in TITLE_BLOCKLIST)
+
 # --- Helper Functions (Copied from Summarizer) ---
 def sanitize_markdown_v2(text: str) -> str:
     escape_chars = r'_*[]()~`>#+-=|{}.!'
@@ -63,9 +75,11 @@ async def send_telegram_message(bot_token, chat_id, message):
         bot = Bot(token=bot_token)
         await bot.send_message(chat_id=chat_id, text=message, parse_mode=ParseMode.MARKDOWN_V2, disable_web_page_preview=True)
         logging.info(f"Successfully sent notification for: {message.splitlines()[0]}")
+        return True
     except TelegramError as e:
-        logging.error(f"FATAL Telegram API Error: {e}")
+        logging.error(f"Telegram API Error: {e}")
         logging.error(f"Message Content that failed:\n---\n{message}\n---")
+        return False
 
 
 async def check_generic_rss(db_path, bot_token, chat_id, source_name, url, title_prefix):
@@ -74,15 +88,18 @@ async def check_generic_rss(db_path, bot_token, chat_id, source_name, url, title
     new_deals_found = 0
     for entry in reversed(feed.entries):
         deal_url = entry.link
+        if is_blocked_title(entry.title):
+            logging.info(f"Skipping blocked title: {entry.title}")
+            continue
         if not is_deal_seen(db_path, deal_url):
             sanitized_title = sanitize_markdown_v2(entry.title)
-            # --- FIX APPLIED HERE ---
             sanitized_link_url = sanitize_url(deal_url)
             message = f"*{sanitize_markdown_v2(title_prefix)}:*\n\n*_{sanitized_title}_*\n\n[Link to Deal]({sanitized_link_url})"
-            await send_telegram_message(bot_token, chat_id, message)
-            save_seen_deal(db_path, deal_url)
-            log_deal_for_summary(deal_url, entry.title)
-            new_deals_found += 1
+            sent = await send_telegram_message(bot_token, chat_id, message)
+            if sent:
+                save_seen_deal(db_path, deal_url)
+                log_deal_for_summary(deal_url, entry.title)
+                new_deals_found += 1
     logging.info(f"{source_name} Check Complete. Found {new_deals_found} new deals.")
 
 async def check_gamerpower_api(db_path, bot_token, chat_id, url):
@@ -101,13 +118,13 @@ async def check_gamerpower_api(db_path, bot_token, chat_id, url):
             if deal_url and not is_deal_seen(db_path, deal_url):
                 title = sanitize_markdown_v2(deal['title'])
                 platforms = sanitize_markdown_v2(deal['platforms'])
-                # --- FIX APPLIED HERE ---
                 sanitized_link_url = sanitize_url(deal_url)
                 message = f"*New Deal from GamerPower:*\n\n*_{title}_*\nPlatforms: `{platforms}`\n\n[Link to Deal]({sanitized_link_url})"
-                await send_telegram_message(bot_token, chat_id, message)
-                save_seen_deal(db_path, deal_url)
-                log_deal_for_summary(deal_url, deal['title'])
-                new_deals_found += 1
+                sent = await send_telegram_message(bot_token, chat_id, message)
+                if sent:
+                    save_seen_deal(db_path, deal_url)
+                    log_deal_for_summary(deal_url, deal['title'])
+                    new_deals_found += 1
     logging.info(f"GamerPower API Check Complete. Found {new_deals_found} new deals.")
 
 async def main():

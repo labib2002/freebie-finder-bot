@@ -3,6 +3,7 @@ import logging
 import asyncio
 import os
 import re
+import json
 import google.generativeai as genai
 from telegram import Bot
 from telegram.constants import ParseMode
@@ -40,48 +41,60 @@ def sanitize_url(url: str) -> str:
     return url.replace('(', '\\(').replace(')', '\\)')
 
 async def get_summary_from_gemini(api_key, deals_data):
-    # This function is assumed correct and remains unchanged.
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
-    formatted_deals = "\n".join([f"Title: {title}\nURL: {url}" for url, title in deals_data])
-    prompt = f"""
-    You are a helpful gaming news analyst. Your task is to analyze the following list of game deal titles and their URLs. Generate a clean, concise summary digest. Your output MUST follow this exact structure, using "|" as a separator and providing only plain text:
-    TITLE: [A main title for the digest, including today's date]
-    OVERVIEW: [A brief, one-sentence overview of the deals]
-    DEAL: [Game Title]|[Platform]|[URL]
-    DEAL: [Another Game Title]|[Another Platform]|[Another URL]
-    """
+    model = genai.GenerativeModel('gemini-3.1-pro-preview')
+
+    # Cap at 50 deals to avoid overwhelming the API
+    if len(deals_data) > 50:
+        logging.warning(f"Capping deals from {len(deals_data)} to 50 for summarization.")
+        deals_data = deals_data[:50]
+
+    formatted_deals = "\n".join([f"- {title} | {url}" for url, title in deals_data])
+    prompt = f"""You are a gaming deals analyst. Summarize these free game deals into a daily digest.
+
+Deals found today:
+{formatted_deals}
+
+Respond with ONLY valid JSON (no markdown fencing, no extra text). Use this exact schema:
+{{
+  "title": "Free Games Digest - [today's date]",
+  "overview": "Brief one-sentence overview of today's deals",
+  "deals": [
+    {{"title": "Game Name", "platform": "Steam", "url": "https://..."}}
+  ]
+}}
+
+Rules:
+- Keep ALL original URLs exactly as provided, do not modify them
+- Detect platform from the title brackets (e.g. [Steam], [Epic Games], [GOG])
+- If platform is unclear, use "PC" as default
+- Include every deal from the input list"""
+
     try:
-        logging.info("Sending request to Gemini API...")
+        logging.info(f"Sending {len(deals_data)} deals to Gemini API...")
         response = await model.generate_content_async(prompt)
         logging.info("Received response from Gemini API.")
         return response.text or ""
     except Exception as e:
         logging.error(f"Error calling Gemini API: {e}")
-        return "ERROR: Failed to generate summary due to an API error."
+        return ""
 
 async def send_telegram_message(bot_token, chat_id, message):
     if not message:
         logging.warning("Attempted to send an empty message. Aborting.")
         return
 
-    # --- HEAVY DEBUGGING PRINT ---
-    # This will print the exact string being sent to Telegram into the GitHub Actions log.
-    print("\n\n--- START FINAL MESSAGE TO TELEGRAM ---")
-    print(message)
-    print("--- END FINAL MESSAGE TO TELEGRAM ---\n\n")
-
     bot = Bot(token=bot_token)
     try:
         await bot.send_message(chat_id=chat_id, text=message, parse_mode=ParseMode.MARKDOWN_V2)
         logging.info("Successfully sent summary to Telegram.")
     except TelegramError as e:
-        logging.error(f"FATAL Telegram API Error: {e}")
-        logging.error(f"Message Content that failed (see above block for exact string).")
-        raise e # Re-raise the error to be caught by the main loop
+        logging.error(f"Telegram API Error: {e}")
+        logging.error(f"Message length: {len(message)} chars")
+        raise e
 
 async def main():
-    logging.info("--- Summarizer Bot v5.0 (HEAVY DEBUG) Run Started ---")
+    logging.info("--- Summarizer Bot v6.0 (JSON-based) Run Started ---")
     log_file = "daily_deals.txt"
     
     # --- Step 1: Load Config and Credentials ---
@@ -111,55 +124,61 @@ async def main():
     # --- Try to build and send the message. Only clear the log on full success. ---
     try:
         # --- Step 3: Get Structured Data from AI ---
-        structured_summary = await get_summary_from_gemini(gemini_api_key, pending_deals)
-        if structured_summary.startswith("ERROR:"):
-            raise Exception("Gemini API failed to generate a summary.")
+        raw_summary = await get_summary_from_gemini(gemini_api_key, pending_deals)
+        if not raw_summary:
+            raise Exception("Gemini API returned empty response.")
 
-        # --- Step 4: Build the Final Message Surgically ---
-        message_parts = []
+        # --- Step 4: Parse JSON response ---
+        cleaned = raw_summary.strip()
+        if cleaned.startswith("```"):
+            cleaned = "\n".join(cleaned.split("\n")[1:])
+        if cleaned.endswith("```"):
+            cleaned = "\n".join(cleaned.split("\n")[:-1])
+        cleaned = cleaned.strip()
+
+        try:
+            data = json.loads(cleaned)
+        except json.JSONDecodeError as e:
+            logging.error(f"Failed to parse Gemini JSON: {e}")
+            logging.error(f"Raw response (first 500 chars): {raw_summary[:500]}")
+            raise Exception("Gemini returned invalid JSON.")
+
+        # --- Step 5: Build the Final Message ---
+        title = sanitize_markdown_v2(data.get("title", "Free Games Digest"))
+        overview = sanitize_markdown_v2(data.get("overview", ""))
+
+        message_parts = [f"*{title}*"]
+        if overview:
+            message_parts.append(f"\n_{overview}_")
+
         deal_lines = []
-        
-        # Aggressively clean the AI output first
-        cleaned_structured_summary = structured_summary.replace('\\', '')
-        
-        for line in cleaned_structured_summary.strip().split('\n'):
-            line = line.strip()
-            if not line: continue
-            if line.startswith("TITLE:"):
-                message_parts.append(f"*{sanitize_markdown_v2(line.replace('TITLE:', '', 1).strip())}*")
-            elif line.startswith("OVERVIEW:"):
-                message_parts.append(f"\n_{sanitize_markdown_v2(line.replace('OVERVIEW:', '', 1).strip())}_")
-            elif line.startswith("DEAL:"):
-                try:
-                    _, data = line.split(":", 1)
-                    title, platform, url = data.strip().split('|', 2)
-                    sanitized_title = sanitize_markdown_v2(title.strip())
-                    sanitized_platform = sanitize_markdown_v2(platform.strip())
-                    sanitized_link_url = sanitize_url(url.strip())
-                    deal_lines.append(f"\u2022 *{sanitized_title}* on `{sanitized_platform}` ([Link]({sanitized_link_url}))")
-                except ValueError:
-                    logging.warning(f"Could not parse deal line: {line}")
-        
-        if not message_parts:
-            raise Exception("AI response was empty or unparsable.")
-        if deal_lines:
-            message_parts.append("\n" + "\n".join(deal_lines))
+        for deal in data.get("deals", []):
+            try:
+                d_title = sanitize_markdown_v2(deal["title"])
+                d_platform = sanitize_markdown_v2(deal.get("platform", "Unknown"))
+                d_url = sanitize_url(deal["url"])
+                deal_lines.append(f"\u2022 *{d_title}* on `{d_platform}` ([Link]({d_url}))")
+            except (KeyError, TypeError) as e:
+                logging.warning(f"Skipping malformed deal entry: {e}")
 
+        if not deal_lines:
+            raise Exception("No deals could be parsed from Gemini response.")
+
+        message_parts.append("\n" + "\n".join(deal_lines))
         footer = "\n\n_This summary was automatically generated by the Hoard\\-Watcher's Chronicler\\._"
         final_message = "\n".join(message_parts) + footer
 
-        # --- Step 5: Send the Message ---
+        # --- Step 6: Send the Message ---
         await send_telegram_message(telegram_token, chat_id, final_message)
-        
-        # --- Step 6: Clean Up ONLY on full success ---
+
+        # --- Step 7: Clean Up ONLY on full success ---
         clear_daily_log(log_file)
 
     except Exception as e:
-        # This will catch ANY failure in the process (Gemini, parsing, sending)
-        logging.error(f"An error occurred during the summarization process: {e}")
-        logging.error("The daily_deals.txt file will be preserved for the next run.")
+        logging.error(f"Summarization failed: {e}")
+        logging.error("daily_deals.txt preserved for next run.")
 
-    logging.info("--- Summarizer Bot v5.0 (HEAVY DEBUG) Run Finished ---")
+    logging.info("--- Summarizer Bot v6.0 Run Finished ---")
 
 if __name__ == "__main__":
     asyncio.run(main())
