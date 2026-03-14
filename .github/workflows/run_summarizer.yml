@@ -14,10 +14,10 @@ jobs:
       contents: write
     steps:
       - name: Check out repository code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -36,9 +36,9 @@ jobs:
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          # This command stages the deletion of the daily_deals.txt file
-          git add daily_deals.txt
-          # Check if the file deletion was staged before committing
+          # Stage any tracked-file changes safely, including an emptied daily_deals.txt
+          git add -A daily_deals.txt
+          # Check if the log reset was staged before committing
           if ! git diff --staged --quiet; then
             git commit -m "Clear daily deals log after summary"
             git push

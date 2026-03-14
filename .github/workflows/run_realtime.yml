@@ -13,10 +13,10 @@ jobs:
       contents: write
     steps:
       - name: Check out repository code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -34,7 +34,7 @@ jobs:
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git add freebies.db daily_deals.txt
+          git add -A freebies.db daily_deals.txt
           if ! git diff --staged --quiet; then
             git commit -m "Update state files (automated)"
             git push

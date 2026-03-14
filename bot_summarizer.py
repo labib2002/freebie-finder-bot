@@ -3,8 +3,9 @@ import logging
 import asyncio
 import os
 import re
-import json
-import google.generativeai as genai
+from google import genai
+from google.genai import types
+from pydantic import BaseModel, Field
 from telegram import Bot
 from telegram.constants import ParseMode
 from telegram.error import TelegramError
@@ -12,24 +13,44 @@ from telegram.error import TelegramError
 # --- Configuration & Logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+MAX_SUMMARY_DEALS = 50
+MAX_TELEGRAM_MESSAGE_CHARS = 3900
+SUMMARY_MODEL = "gemini-3.1-pro-preview"
+
+
+class SummaryDeal(BaseModel):
+    title: str = Field(description="The human-readable deal title.")
+    platform: str = Field(description="The main platform, storefront, or source.")
+    url: str = Field(description="The original URL for the deal.")
+
+
+class DailySummary(BaseModel):
+    title: str = Field(description="A concise title for the digest.")
+    overview: str = Field(description="A one-sentence overview of the digest.")
+    deals: list[SummaryDeal] = Field(description="The list of summarized deals.")
+
 # --- Helper Functions ---
 def get_pending_deals(filename="daily_deals.txt"):
     deals = []
+    seen = set()
     try:
         with open(filename, 'r', encoding='utf-8') as f:
             for line in f:
                 if '|||' in line:
-                    deals.append(line.strip().split('|||', 1))
-        return list(set(map(tuple, deals)))
+                    deal = tuple(line.strip().split('|||', 1))
+                    if deal not in seen:
+                        seen.add(deal)
+                        deals.append(deal)
+        return deals
     except FileNotFoundError:
         logging.info("No daily deals log file found. Nothing to summarize.")
         return []
 
 def clear_daily_log(filename="daily_deals.txt"):
     try:
-        if os.path.exists(filename):
-            os.remove(filename)
-            logging.info(f"Successfully cleared '{filename}' for the next cycle.")
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write("")
+        logging.info(f"Successfully reset '{filename}' for the next cycle.")
     except Exception as e:
         logging.error(f"Failed to clear daily log: {e}")
 
@@ -41,53 +62,103 @@ def sanitize_url(url: str) -> str:
     return url.replace('(', '\\(').replace(')', '\\)')
 
 async def get_summary_from_gemini(api_key, deals_data):
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-3.1-pro-preview')
+    if len(deals_data) > MAX_SUMMARY_DEALS:
+        logging.warning(
+            f"Capping deals from {len(deals_data)} to the newest {MAX_SUMMARY_DEALS} for summarization."
+        )
+        deals_data = deals_data[-MAX_SUMMARY_DEALS:]
 
-    # Cap at 50 deals to avoid overwhelming the API
-    if len(deals_data) > 50:
-        logging.warning(f"Capping deals from {len(deals_data)} to 50 for summarization.")
-        deals_data = deals_data[:50]
-
-    formatted_deals = "\n".join([f"- {title} | {url}" for url, title in deals_data])
-    prompt = f"""You are a gaming deals analyst. Summarize these free game deals into a daily digest.
-
-Deals found today:
-{formatted_deals}
-
-Respond with ONLY valid JSON (no markdown fencing, no extra text). Use this exact schema:
-{{
-  "title": "Free Games Digest - [today's date]",
-  "overview": "Brief one-sentence overview of today's deals",
-  "deals": [
-    {{"title": "Game Name", "platform": "Steam", "url": "https://..."}}
-  ]
-}}
-
-Rules:
-- Keep ALL original URLs exactly as provided, do not modify them
-- Detect platform from the title brackets (e.g. [Steam], [Epic Games], [GOG])
-- If platform is unclear, use "PC" as default
-- Include every deal from the input list"""
+    formatted_deals = "\n".join(
+        [f"- Title: {title}\n  URL: {url}" for url, title in deals_data]
+    )
+    prompt = (
+        "Create a daily free-games digest from the deals below. "
+        "Keep the original URLs exactly as given, infer a platform/storefront from the title when possible, "
+        "and include every input deal exactly once.\n\n"
+        f"Deals found today:\n{formatted_deals}"
+    )
 
     try:
-        logging.info(f"Sending {len(deals_data)} deals to Gemini API...")
-        response = await model.generate_content_async(prompt)
+        logging.info(f"Sending {len(deals_data)} deals to Gemini API with structured output...")
+        async with genai.Client(api_key=api_key).aio as client:
+            response = await client.models.generate_content(
+                model=SUMMARY_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=DailySummary,
+                    temperature=0.2,
+                ),
+            )
         logging.info("Received response from Gemini API.")
-        return response.text or ""
+        if getattr(response, "parsed", None):
+            return response.parsed
+        if response.text:
+            return DailySummary.model_validate_json(response.text)
+        return None
     except Exception as e:
         logging.error(f"Error calling Gemini API: {e}")
-        return ""
+        return None
+
+
+def build_summary_messages(summary: DailySummary) -> list[str]:
+    title = sanitize_markdown_v2(summary.title or "Free Games Digest")
+    overview = sanitize_markdown_v2(summary.overview or "")
+
+    header_parts = [f"*{title}*"]
+    if overview:
+        header_parts.append(f"_{overview}_")
+    header = "\n\n".join(header_parts)
+    continuation_header = f"*{title}*\n\n_Continued_"
+    footer = "\n\n_This summary was automatically generated by the Hoard\\-Watcher's Chronicler\\._"
+
+    deal_lines = []
+    for deal in summary.deals:
+        d_title = sanitize_markdown_v2(deal.title)
+        d_platform = sanitize_markdown_v2(deal.platform or "Unknown")
+        d_url = sanitize_url(deal.url)
+        deal_lines.append(f"\u2022 *{d_title}* on `{d_platform}` ([Link]({d_url}))")
+
+    if not deal_lines:
+        raise Exception("No deals could be parsed from Gemini response.")
+
+    messages = []
+    current = header
+    last_index = len(deal_lines) - 1
+    for index, deal_line in enumerate(deal_lines):
+        is_last = index == last_index
+        suffix = footer if is_last else ""
+        candidate = f"{current}\n{deal_line}{suffix}" if current else f"{deal_line}{suffix}"
+        if len(candidate) > MAX_TELEGRAM_MESSAGE_CHARS:
+            if current:
+                messages.append(current)
+            current = continuation_header
+            candidate = f"{current}\n{deal_line}{suffix}"
+            if len(candidate) > MAX_TELEGRAM_MESSAGE_CHARS:
+                raise Exception("A single summary deal entry is too long to fit in a Telegram message.")
+            current = candidate
+        else:
+            current = candidate
+
+    if current:
+        messages.append(current)
+    return messages
 
 async def send_telegram_message(bot_token, chat_id, message):
     if not message:
         logging.warning("Attempted to send an empty message. Aborting.")
-        return
+        return False
 
     bot = Bot(token=bot_token)
     try:
-        await bot.send_message(chat_id=chat_id, text=message, parse_mode=ParseMode.MARKDOWN_V2)
+        await bot.send_message(
+            chat_id=chat_id,
+            text=message,
+            parse_mode=ParseMode.MARKDOWN_V2,
+            disable_web_page_preview=True,
+        )
         logging.info("Successfully sent summary to Telegram.")
+        return True
     except TelegramError as e:
         logging.error(f"Telegram API Error: {e}")
         logging.error(f"Message length: {len(message)} chars")
@@ -124,54 +195,19 @@ async def main():
     # --- Try to build and send the message. Only clear the log on full success. ---
     try:
         # --- Step 3: Get Structured Data from AI ---
-        raw_summary = await get_summary_from_gemini(gemini_api_key, pending_deals)
-        if not raw_summary:
+        summary = await get_summary_from_gemini(gemini_api_key, pending_deals)
+        if not summary:
             raise Exception("Gemini API returned empty response.")
 
-        # --- Step 4: Parse JSON response ---
-        cleaned = raw_summary.strip()
-        if cleaned.startswith("```"):
-            cleaned = "\n".join(cleaned.split("\n")[1:])
-        if cleaned.endswith("```"):
-            cleaned = "\n".join(cleaned.split("\n")[:-1])
-        cleaned = cleaned.strip()
+        # --- Step 4: Build Telegram-safe message chunks ---
+        messages = build_summary_messages(summary)
 
-        try:
-            data = json.loads(cleaned)
-        except json.JSONDecodeError as e:
-            logging.error(f"Failed to parse Gemini JSON: {e}")
-            logging.error(f"Raw response (first 500 chars): {raw_summary[:500]}")
-            raise Exception("Gemini returned invalid JSON.")
+        # --- Step 5: Send the Message(s) ---
+        for index, message in enumerate(messages, start=1):
+            logging.info(f"Sending summary message chunk {index}/{len(messages)}...")
+            await send_telegram_message(telegram_token, chat_id, message)
 
-        # --- Step 5: Build the Final Message ---
-        title = sanitize_markdown_v2(data.get("title", "Free Games Digest"))
-        overview = sanitize_markdown_v2(data.get("overview", ""))
-
-        message_parts = [f"*{title}*"]
-        if overview:
-            message_parts.append(f"\n_{overview}_")
-
-        deal_lines = []
-        for deal in data.get("deals", []):
-            try:
-                d_title = sanitize_markdown_v2(deal["title"])
-                d_platform = sanitize_markdown_v2(deal.get("platform", "Unknown"))
-                d_url = sanitize_url(deal["url"])
-                deal_lines.append(f"\u2022 *{d_title}* on `{d_platform}` ([Link]({d_url}))")
-            except (KeyError, TypeError) as e:
-                logging.warning(f"Skipping malformed deal entry: {e}")
-
-        if not deal_lines:
-            raise Exception("No deals could be parsed from Gemini response.")
-
-        message_parts.append("\n" + "\n".join(deal_lines))
-        footer = "\n\n_This summary was automatically generated by the Hoard\\-Watcher's Chronicler\\._"
-        final_message = "\n".join(message_parts) + footer
-
-        # --- Step 6: Send the Message ---
-        await send_telegram_message(telegram_token, chat_id, final_message)
-
-        # --- Step 7: Clean Up ONLY on full success ---
+        # --- Step 6: Clean Up ONLY on full success ---
         clear_daily_log(log_file)
 
     except Exception as e:
