@@ -117,7 +117,7 @@ def build_summary_messages(summary: DailySummary) -> list[str]:
         d_title = sanitize_markdown_v2(deal.title)
         d_platform = sanitize_markdown_v2(deal.platform or "Unknown")
         d_url = sanitize_url(deal.url)
-        deal_lines.append(f"\u2022 *{d_title}* on `{d_platform}` ([Link]({d_url}))")
+        deal_lines.append(f"\u2022 *{d_title}* on `{d_platform}` [Link]({d_url})")
 
     if not deal_lines:
         raise Exception("No deals could be parsed from Gemini response.")
