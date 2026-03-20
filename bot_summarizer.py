@@ -15,7 +15,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 MAX_SUMMARY_DEALS = 50
 MAX_TELEGRAM_MESSAGE_CHARS = 3900
-SUMMARY_MODEL = "gemini-3.1-pro-preview"
+SUMMARY_MODEL = "gemini-3-flash-preview"
 
 
 class SummaryDeal(BaseModel):
