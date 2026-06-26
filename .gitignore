@@ -1,14 +1,15 @@
-# Python Virtual Environment
+# --- Legacy Python bot (retired; kept locally as backup, not tracked) ---
 venv/
-
-# Python cache files
 __pycache__/
 *.pyc
+parsers/
+config.ini          # legacy plaintext secrets — rotate, do not commit
+freebies.db          # legacy SQLite state — superseded by Neon
+daily_deals.txt      # legacy summary queue — superseded by DB digests
 
-# IDE and OS specific files
+# --- IDE / OS ---
 .idea/
 .vscode/
 .DS_Store
 
-# Sensitive configuration
-config.ini
+# Note: the active app lives in web/ and has its own web/.gitignore

@@ -1,0 +1,22 @@
+name: Poll Freebies (real-time)
+
+# Heartbeat that triggers the deployed Vercel app to fetch sources, dedup, and
+# deliver new deals. Vercel Hobby cron is daily-only, so we drive the 30-min
+# cadence from GitHub Actions (free).
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/30 * * * *"
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger /api/poll
+        run: |
+          curl -fsS --retry 2 -X POST "${APP_URL%/}/api/poll" \
+            -H "Authorization: Bearer ${CRON_SECRET}" | head -c 2000
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}

@@ -1,0 +1,18 @@
+name: Daily Digest
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 22 * * *" # 22:00 UTC daily
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger /api/digest
+        run: |
+          curl -fsS --retry 2 -X POST "${APP_URL%/}/api/digest" \
+            -H "Authorization: Bearer ${CRON_SECRET}" | head -c 2000
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
