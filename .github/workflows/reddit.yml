@@ -1,0 +1,35 @@
+name: Reddit Source (fetch + forward)
+
+# Reddit 403s Vercel's datacenter IPs but serves its feed from GitHub Actions
+# runners. So we fetch the RSS here and POST the raw XML to the app, which
+# parses + dedups + delivers it like any other source. 30-min cadence.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/30 * * * *"
+
+jobs:
+  reddit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch Reddit RSS and forward to app
+        run: |
+          UA="Mozilla/5.0 (compatible; FreebieFinder/2.0; +https://github.com/labib2002/freebie-finder-bot)"
+          code=$(curl -s -o /tmp/reddit.xml -w "%{http_code}" \
+            -H "User-Agent: $UA" \
+            "https://www.reddit.com/r/FreeGameFindings/new.rss")
+          bytes=$(wc -c < /tmp/reddit.xml)
+          echo "Reddit fetch: HTTP $code ($bytes bytes)"
+          if [ "$code" != "200" ] || [ "$bytes" -lt 100 ]; then
+            echo "::warning::Reddit fetch failed (HTTP $code, $bytes bytes); skipping forward."
+            exit 0
+          fi
+          echo "Forwarding to ${APP_URL%/}/api/ingest-reddit ..."
+          curl -fsS --retry 2 -X POST "${APP_URL%/}/api/ingest-reddit" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: text/xml" \
+            --data-binary @/tmp/reddit.xml | head -c 2000
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}

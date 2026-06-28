@@ -52,9 +52,10 @@ async function fetchViaJson(): Promise<SourceItem[]> {
   });
 }
 
-/** Fallback when Reddit blocks the JSON API (cloud IPs sometimes get 403). */
-async function fetchViaRss(): Promise<SourceItem[]> {
-  const xml = await fetchText(RSS_URL);
+/** Parse Reddit RSS XML into SourceItems. Shared by the in-process fetch and
+ * the /api/ingest-reddit endpoint (which receives XML fetched by GitHub Actions
+ * from a non-datacenter IP, since Reddit 403s Vercel's IPs). */
+export async function parseRedditRss(xml: string): Promise<SourceItem[]> {
   const feed = await new Parser().parseString(xml);
   return (feed.items ?? []).map((item) => ({
     source: "reddit",
@@ -64,6 +65,11 @@ async function fetchViaRss(): Promise<SourceItem[]> {
     directUrl: null, // RSS doesn't expose the outbound link
     payload: item,
   }));
+}
+
+/** Fallback when Reddit blocks the JSON API (cloud IPs sometimes get 403). */
+async function fetchViaRss(): Promise<SourceItem[]> {
+  return parseRedditRss(await fetchText(RSS_URL));
 }
 
 export async function fetchReddit(): Promise<SourceItem[]> {

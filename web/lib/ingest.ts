@@ -150,12 +150,13 @@ async function deactivateStale(): Promise<number> {
 }
 
 /**
- * Full ingestion pass: fetch all sources, normalize, dedup, persist.
- * Returns the newly-created canonical deals (the ones that need delivery).
+ * Normalize + dedup + persist a batch of already-fetched items.
+ * Shared by the full poll (runIngest) and the Reddit-via-GitHub-Actions
+ * endpoint. Does NOT deactivate stale deals — callers decide that.
  */
-export async function runIngest(): Promise<IngestSummary> {
-  const { items, results } = await collectAll();
-
+export async function ingestItems(
+  items: SourceItem[],
+): Promise<{ itemsSeen: number; blocked: number; newDeals: Deal[]; updatedDeals: number }> {
   let blocked = 0;
   let updated = 0;
   const newDeals: Deal[] = [];
@@ -177,14 +178,24 @@ export async function runIngest(): Promise<IngestSummary> {
     }
   }
 
+  return { itemsSeen: items.length, blocked, newDeals, updatedDeals: updated };
+}
+
+/**
+ * Full ingestion pass: fetch all sources, normalize, dedup, persist.
+ * Returns the newly-created canonical deals (the ones that need delivery).
+ */
+export async function runIngest(): Promise<IngestSummary> {
+  const { items, results } = await collectAll();
+  const r = await ingestItems(items);
   const deactivated = await deactivateStale();
 
   return {
     sources: results,
-    itemsSeen: items.length,
-    blocked,
-    newDeals,
-    updatedDeals: updated,
+    itemsSeen: r.itemsSeen,
+    blocked: r.blocked,
+    newDeals: r.newDeals,
+    updatedDeals: r.updatedDeals,
     deactivated,
   };
 }
