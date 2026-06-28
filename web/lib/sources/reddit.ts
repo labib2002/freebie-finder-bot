@@ -3,8 +3,10 @@ import { fetchJson, fetchText } from "./http";
 import type { SourceItem } from "./types";
 
 const SUBREDDIT = "FreeGameFindings";
-const JSON_URL = `https://www.reddit.com/r/${SUBREDDIT}/new.json?limit=50`;
-const RSS_URL = `https://www.reddit.com/r/${SUBREDDIT}/new.rss`;
+// old.reddit.com is far less aggressively IP-blocked than www.reddit.com
+// (www returns 403/429 from datacenter IPs like Vercel; old still serves RSS).
+const JSON_URL = `https://old.reddit.com/r/${SUBREDDIT}/new.json?limit=50`;
+const RSS_URL = `https://old.reddit.com/r/${SUBREDDIT}/new.rss`;
 
 interface RedditChild {
   data: {
