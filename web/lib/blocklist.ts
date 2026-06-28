@@ -15,6 +15,12 @@ const TITLE_BLOCKLIST = [
   "free game of the",
   "psa:",
   "meta:",
+  // Prime Gaming recurring roundup/promo articles (not individual free games).
+  "content update",
+  "prime day",
+  "claim monthly",
+  "bonus games",
+  "content roundup",
 ];
 
 export function isBlockedTitle(title: string): boolean {
